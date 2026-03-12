@@ -4,7 +4,6 @@ import logging
 from sqlalchemy import Column, Date, Enum, Float, Integer, String
 from sqlalchemy.orm import declarative_base
 
-# Initialize logging context
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
@@ -34,7 +33,7 @@ class VatInventory(Base):
     vat_company = Column(Enum(VatCompany), nullable=False, default=VatCompany.NONE)
     cost = Column(Float, nullable=False, default=0.0)
 
-    # --- Manual Data Entry (From UI) ---
+    # --- Manual Data Entry Inbound ---
     inbound_payment_method = Column(String(100), nullable=True)
     inbound_bank_or_company = Column(String(100), nullable=True)
 
@@ -42,3 +41,8 @@ class VatInventory(Base):
     status = Column(Enum(VatStatus), nullable=False, default=VatStatus.AVAILABLE)
     used_date = Column(Date, nullable=True)
     customer_name = Column(String(255), nullable=True)
+    sales_price = Column(Float, nullable=True, default=0.0)
+
+    # --- Manual Data Entry Outbound ---
+    outbound_payment_method = Column(String(100), nullable=True)
+    outbound_receiving_company = Column(String(100), nullable=True)
