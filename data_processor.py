@@ -68,7 +68,11 @@ def load_pos_file(file_content: bytes) -> Optional[pd.DataFrame]:
 
     # 2. ถ้าเป็นไฟล์ Excel ของแท้จริงๆ
     try:
-        df_temp = pd.read_excel(io.BytesIO(file_content), header=None)
+        # ใช้ ExcelFile เพื่อเปิดไฟล์ (ลดการอ่านซ้ำและช่วยให้ pandas เลือก engine เอง)
+        excel_file = pd.ExcelFile(io.BytesIO(file_content))
+        
+        # อ่านเฉพาะชีตแรก (สมมติว่าข้อมูลอยู่ในชีตแรก)
+        df_temp = pd.read_excel(excel_file, header=None, sheet_name=0)
         header_idx = -1
         for i, row in df_temp.iterrows():
             # หาแถวที่มีคำว่า Serial No
@@ -77,11 +81,14 @@ def load_pos_file(file_content: bytes) -> Optional[pd.DataFrame]:
                 break
         
         if header_idx != -1:
-            df = pd.read_excel(io.BytesIO(file_content), header=header_idx)
+            df = pd.read_excel(excel_file, header=header_idx, sheet_name=0)
             return df
-    except Exception:
-        pass
-
+    except ImportError as e:
+        # กรณีที่ไม่มีไลบรารีสำหรับอ่านไฟล์ Excel (เช่น xlrd สำหรับ .xls)
+        logger.error("Missing library for Excel file: %s. Please install xlrd for .xls files.", e)
+    except Exception as e:
+        logger.exception("Error reading Excel file: %s", e)
+    
     return None
 
 
@@ -153,3 +160,4 @@ def process_sales_file(file_content: bytes) -> Optional[pd.DataFrame]:
         df = df[df['Serial No'] != '']
 
     return df
+
