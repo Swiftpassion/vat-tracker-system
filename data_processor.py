@@ -42,50 +42,67 @@ def clean_serial_no(serial_series: pd.Series) -> pd.Series:
 def load_pos_file(file_content: bytes) -> Optional[pd.DataFrame]:
     """
     ฟังก์ชันสุดแกร่ง: ค้นหาแถวที่มีคำว่า 'Serial No' อัตโนมัติ 
-    และรองรับภาษาไทยทุกรูปแบบ (UTF-8, TIS-620, CP874)
+    รองรับภาษาไทยทุกรูปแบบ (UTF-8, TIS-620, CP874)
+    และดึงวันที่จากแถวก่อนหน้า (ถ้ามี) เพิ่มเป็นคอลัมน์ 'วันที่'
     """
     encodings = ['utf-8', 'tis-620', 'cp874']
     
-    # 1. พยายามอ่านแบบ Text/CSV/TSV ก่อน (เพราะ POS ชอบเซฟ CSV แต่เปลี่ยนนามสกุลเป็น XLS)
+    # ------------------- กรณีไฟล์ CSV/Text -------------------
     for enc in encodings:
         try:
             text_data = file_content.decode(enc)
             lines = text_data.splitlines()
             
             header_idx = -1
+            date_value = None
             for i, line in enumerate(lines):
                 if 'Serial No' in line:
                     header_idx = i
+                    # หาวันที่จากบรรทัดก่อนหน้า
+                    if i > 0 and 'วันที่' in lines[i-1]:
+                        parts = lines[i-1].replace(',', '\t').split('\t')
+                        for part in parts:
+                            part = part.strip()
+                            # รูปแบบวันที่ DD/MM/YYYY
+                            if part and '/' in part and len(part.split('/')) == 3:
+                                date_value = part
+                                break
                     break
             
             if header_idx != -1:
-                # เช็คว่าใช้ลูกน้ำ (,) หรือ Tab (\t) คั่นข้อมูล
                 sep = '\t' if '\t' in lines[header_idx] else ','
                 df = pd.read_csv(io.StringIO(text_data), header=header_idx, sep=sep)
+                if date_value:
+                    df['วันที่'] = date_value
                 return df
         except Exception:
             continue
 
-    # 2. ถ้าเป็นไฟล์ Excel ของแท้จริงๆ
+    # ------------------- กรณีไฟล์ Excel -------------------
     try:
-        # ใช้ ExcelFile เพื่อเปิดไฟล์ (ลดการอ่านซ้ำและช่วยให้ pandas เลือก engine เอง)
         excel_file = pd.ExcelFile(io.BytesIO(file_content))
-        
-        # อ่านเฉพาะชีตแรก (สมมติว่าข้อมูลอยู่ในชีตแรก)
+        # อ่านชีตแรกโดยไม่กำหนด header เพื่อหาบรรทัดที่มี 'Serial No'
         df_temp = pd.read_excel(excel_file, header=None, sheet_name=0)
         header_idx = -1
+        date_value = None
         for i, row in df_temp.iterrows():
-            # หาแถวที่มีคำว่า Serial No
             if 'Serial No' in [str(val).strip() for val in row.values]:
                 header_idx = i
+                # ตรวจสอบแถวก่อนหน้าว่ามีวันที่หรือไม่
+                if i > 0:
+                    prev_row = df_temp.iloc[i-1]
+                    for val in prev_row.values:
+                        val_str = str(val).strip()
+                        if '/' in val_str and len(val_str.split('/')) == 3:
+                            date_value = val_str
+                            break
                 break
         
         if header_idx != -1:
             df = pd.read_excel(excel_file, header=header_idx, sheet_name=0)
+            if date_value:
+                df['วันที่'] = date_value
             return df
-    except ImportError as e:
-        # กรณีที่ไม่มีไลบรารีสำหรับอ่านไฟล์ Excel (เช่น xlrd สำหรับ .xls)
-        logger.error("Missing library for Excel file: %s. Please install xlrd for .xls files.", e)
     except Exception as e:
         logger.exception("Error reading Excel file: %s", e)
     
@@ -160,4 +177,5 @@ def process_sales_file(file_content: bytes) -> Optional[pd.DataFrame]:
         df = df[df['Serial No'] != '']
 
     return df
+
 
