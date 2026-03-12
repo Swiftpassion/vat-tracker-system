@@ -7,21 +7,29 @@ import pandas as pd
 
 from models import VatCompany
 
-# Initialize logging
+# Initialize logging context
 logger = logging.getLogger(__name__)
 
 
 def extract_vat_company(supplier_name: Any) -> VatCompany:
-    """Extracts VAT company from supplier name using Regex."""
+    """Extracts VAT company from supplier name using Regex.
+    
+    Args:
+        supplier_name (Any): The name of the supplier.
+        
+    Returns:
+        VatCompany: The matched VAT company enum (KIT, S16, or NONE).
+    """
     if pd.isna(supplier_name) or not isinstance(supplier_name, str):
         return VatCompany.NONE
 
-    # Remove all spaces and convert to uppercase
+    # Remove all spaces and convert to uppercase for robust matching
     text = supplier_name.upper().replace(" ", "")
 
-    if re.search(r'/VATS16', text):
+    # Match /KIT, /S16 directly
+    if re.search(r'/S16', text):
         return VatCompany.S16
-    elif re.search(r'/VATKIT', text):
+    elif re.search(r'/KIT', text):
         return VatCompany.KIT
     elif re.search(r'/N', text):
         return VatCompany.NONE
@@ -177,5 +185,6 @@ def process_sales_file(file_content: bytes) -> Optional[pd.DataFrame]:
         df = df[df['Serial No'] != '']
 
     return df
+
 
 
