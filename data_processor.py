@@ -1,7 +1,7 @@
 import io
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -12,20 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def extract_vat_company(supplier_name: Any) -> VatCompany:
-    """Extracts VAT company from supplier name using Regex.
-
-    Matches patterns like '/Vat S16', '/Vat Kit', or '/N' ignoring case and spaces.
-
-    Args:
-        supplier_name: The raw string of the supplier name.
-
-    Returns:
-        VatCompany: The matched enum value (S16, KIT, or NONE).
-    """
+    """Extracts VAT company from supplier name using Regex."""
     if pd.isna(supplier_name) or not isinstance(supplier_name, str):
         return VatCompany.NONE
 
-    # Remove all spaces and convert to uppercase for easier regex matching
+    # Remove all spaces and convert to uppercase
     text = supplier_name.upper().replace(" ", "")
 
     if re.search(r'/VATS16', text):
@@ -39,14 +30,7 @@ def extract_vat_company(supplier_name: Any) -> VatCompany:
 
 
 def clean_serial_no(serial_series: pd.Series) -> pd.Series:
-    """Removes trailing '.0' and cleans the Serial Number column.
-
-    Args:
-        serial_series: A pandas Series containing serial numbers.
-
-    Returns:
-        pd.Series: The cleaned serial numbers as strings.
-    """
+    """Removes trailing '.0' and cleans the Serial Number column."""
     return (
         serial_series.astype(str)
         .str.replace(r'\.0$', '', regex=True)
@@ -55,24 +39,57 @@ def clean_serial_no(serial_series: pd.Series) -> pd.Series:
     )
 
 
-def process_purchase_file(file_content: bytes) -> Optional[pd.DataFrame]:
-    """Reads and cleans the inbound purchase file.
-
-    Handles the merging of multi-line product/supplier names and extracts VAT company.
-
-    Args:
-        file_content: Raw bytes of the uploaded file.
-
-    Returns:
-        pd.DataFrame: Cleaned data ready for preview/database insertion, or None if failed.
+def load_pos_file(file_content: bytes) -> Optional[pd.DataFrame]:
     """
-    try:
+    ฟังก์ชันสุดแกร่ง: ค้นหาแถวที่มีคำว่า 'Serial No' อัตโนมัติ 
+    และรองรับภาษาไทยทุกรูปแบบ (UTF-8, TIS-620, CP874)
+    """
+    encodings = ['utf-8', 'tis-620', 'cp874']
+    
+    # 1. พยายามอ่านแบบ Text/CSV/TSV ก่อน (เพราะ POS ชอบเซฟ CSV แต่เปลี่ยนนามสกุลเป็น XLS)
+    for enc in encodings:
         try:
-            df = pd.read_csv(io.BytesIO(file_content), header=5, encoding='utf-8')
+            text_data = file_content.decode(enc)
+            lines = text_data.splitlines()
+            
+            header_idx = -1
+            for i, line in enumerate(lines):
+                if 'Serial No' in line:
+                    header_idx = i
+                    break
+            
+            if header_idx != -1:
+                # เช็คว่าใช้ลูกน้ำ (,) หรือ Tab (\t) คั่นข้อมูล
+                sep = '\t' if '\t' in lines[header_idx] else ','
+                df = pd.read_csv(io.StringIO(text_data), header=header_idx, sep=sep)
+                return df
         except Exception:
-            df = pd.read_excel(io.BytesIO(file_content), header=5)
-    except Exception as e:
-        logger.error("Failed to read purchase file: %s", e)
+            continue
+
+    # 2. ถ้าเป็นไฟล์ Excel ของแท้จริงๆ
+    try:
+        df_temp = pd.read_excel(io.BytesIO(file_content), header=None)
+        header_idx = -1
+        for i, row in df_temp.iterrows():
+            # หาแถวที่มีคำว่า Serial No
+            if 'Serial No' in [str(val).strip() for val in row.values]:
+                header_idx = i
+                break
+        
+        if header_idx != -1:
+            df = pd.read_excel(io.BytesIO(file_content), header=header_idx)
+            return df
+    except Exception:
+        pass
+
+    return None
+
+
+def process_purchase_file(file_content: bytes) -> Optional[pd.DataFrame]:
+    df = load_pos_file(file_content)
+    
+    if df is None:
+        logger.error("Failed to read purchase file.")
         return None
 
     cleaned_rows = []
@@ -109,6 +126,8 @@ def process_purchase_file(file_content: bytes) -> Optional[pd.DataFrame]:
         df_cleaned['Serial No'] = clean_serial_no(df_cleaned['Serial No'])
     
     if 'ราคาซื้อ' in df_cleaned.columns:
+        # ลบเครื่องหมายคอมม่าในราคา (ถ้ามี) แล้วแปลงเป็นตัวเลข
+        df_cleaned['ราคาซื้อ'] = df_cleaned['ราคาซื้อ'].astype(str).str.replace(',', '')
         df_cleaned['ราคาซื้อ'] = pd.to_numeric(df_cleaned['ราคาซื้อ'], errors='coerce').fillna(0.0)
 
     # Apply Regex to find VAT Company
@@ -116,27 +135,17 @@ def process_purchase_file(file_content: bytes) -> Optional[pd.DataFrame]:
         df_cleaned['vat_company_enum'] = df_cleaned['ชื่อผู้จำหน่าย'].apply(extract_vat_company)
 
     # Filter out rows without a valid Serial Number
-    df_cleaned = df_cleaned[df_cleaned['Serial No'] != '']
+    if 'Serial No' in df_cleaned.columns:
+        df_cleaned = df_cleaned[df_cleaned['Serial No'] != '']
 
     return df_cleaned
 
 
 def process_sales_file(file_content: bytes) -> Optional[pd.DataFrame]:
-    """Reads and cleans the outbound sales file to extract sold IMEI and customers.
-
-    Args:
-        file_content: Raw bytes of the uploaded sales file.
-
-    Returns:
-        pd.DataFrame: Cleaned sales data, or None if failed.
-    """
-    try:
-        try:
-            df = pd.read_csv(io.BytesIO(file_content), header=5, encoding='utf-8')
-        except Exception:
-            df = pd.read_excel(io.BytesIO(file_content), header=5)
-    except Exception as e:
-        logger.error("Failed to read sales file: %s", e)
+    df = load_pos_file(file_content)
+    
+    if df is None:
+        logger.error("Failed to read sales file.")
         return None
 
     if 'Serial No' in df.columns:
